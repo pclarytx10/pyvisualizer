@@ -1,10 +1,10 @@
 import pygame
 import pyaudio
 import numpy as np
-import threading
+# import threading
 import math
 import colorsys
-from collections import deque
+# from collections import deque
 
 class AudioVisualizer:
     def __init__(self, width=1200, height=800):
@@ -25,8 +25,8 @@ class AudioVisualizer:
         # Audio processing
         self.audio = pyaudio.PyAudio()
         self.stream = None
-        self.audio_data = np.zeros(self.CHUNK)
-        self.freq_data = np.zeros(self.CHUNK // 2)
+        self.audio_data = np.zeros(self.CHUNK, dtype=np.float32)
+        self.freq_data = np.zeros(self.CHUNK // 2, dtype=np.float32)
         self.is_recording = False
         
         # Visualization settings
@@ -79,12 +79,33 @@ class AudioVisualizer:
     
     def audio_callback(self, in_data, frame_count, time_info, status):
         """Audio input callback"""
-        audio_array = np.frombuffer(in_data, dtype=np.float32)
-        self.audio_data = audio_array.copy()
-        
-        # Compute FFT for frequency analysis
-        fft = np.fft.fft(audio_array)
-        self.freq_data = np.abs(fft[:len(fft)//2])
+        try:
+            audio_array = np.frombuffer(in_data, dtype=np.float32)
+            
+            # Ensure valid audio data
+            if len(audio_array) > 0:
+                # Remove any NaN or infinite values
+                audio_array = np.nan_to_num(audio_array, nan=0.0, posinf=0.0, neginf=0.0)
+                # Clip to reasonable range
+                audio_array = np.clip(audio_array, -1.0, 1.0)
+                self.audio_data = audio_array.copy()
+                
+                # Compute FFT for frequency analysis
+                fft = np.fft.fft(audio_array)
+                freq_magnitude = np.abs(fft[:len(fft)//2])
+                # Clean up frequency data
+                freq_magnitude = np.nan_to_num(freq_magnitude, nan=0.0, posinf=0.0, neginf=0.0)
+                self.freq_data = freq_magnitude
+            else:
+                # Fallback to zeros if no data
+                self.audio_data = np.zeros(self.CHUNK, dtype=np.float32)
+                self.freq_data = np.zeros(self.CHUNK // 2, dtype=np.float32)
+                
+        except Exception as e:
+            print(f"Audio callback error: {e}")
+            # Fallback to zeros on error
+            self.audio_data = np.zeros(self.CHUNK, dtype=np.float32)
+            self.freq_data = np.zeros(self.CHUNK // 2, dtype=np.float32)
         
         return (in_data, pyaudio.paContinue)
     
@@ -106,28 +127,42 @@ class AudioVisualizer:
         if len(self.freq_data) == 0:
             return
             
-        # Normalize frequency data
-        freq_normalized = self.freq_data / (np.max(self.freq_data) + 1e-6)
+        # Safely normalize frequency data
+        max_freq = np.max(self.freq_data)
+        if max_freq > 0 and np.isfinite(max_freq):
+            freq_normalized = np.clip(self.freq_data / max_freq, 0, 1)
+        else:
+            freq_normalized = np.zeros_like(self.freq_data)
         
-        bar_width = self.width / len(freq_normalized)
+        bar_width = max(1, self.width / len(freq_normalized))
         
         for i, amplitude in enumerate(freq_normalized):
-            bar_height = amplitude * self.height * 0.8
+            # Ensure amplitude is valid
+            if not np.isfinite(amplitude):
+                amplitude = 0
+            
+            bar_height = max(0, min(amplitude * self.height * 0.8, self.height))
             hue = i / len(freq_normalized)
-            brightness = 0.5 + amplitude * 0.5
+            brightness = np.clip(0.5 + amplitude * 0.5, 0, 1)
             
             color = self.hsv_to_rgb(hue, 1.0, brightness)
             
-            # Draw main bar
-            rect = pygame.Rect(i * bar_width, self.height - bar_height, 
-                             bar_width - 1, bar_height)
-            pygame.draw.rect(self.screen, color, rect)
+            # Ensure rect values are valid integers
+            x = int(i * bar_width)
+            y = int(self.height - bar_height)
+            width = max(1, int(bar_width - 1))
+            height = max(1, int(bar_height))
             
-            # Add glow effect
-            glow_color = self.hsv_to_rgb(hue, 1.0, min(1.0, brightness + 0.3))
-            glow_rect = pygame.Rect(i * bar_width - 1, self.height - bar_height - 2,
-                                  bar_width + 1, bar_height + 4)
-            pygame.draw.rect(self.screen, glow_color, glow_rect, 1)
+            # Draw main bar
+            if width > 0 and height > 0:
+                rect = pygame.Rect(x, y, width, height)
+                pygame.draw.rect(self.screen, color, rect)
+                
+                # Add glow effect
+                glow_color = self.hsv_to_rgb(hue, 1.0, min(1.0, brightness + 0.3))
+                glow_rect = pygame.Rect(max(0, x - 1), max(0, y - 2),
+                                      width + 2, height + 4)
+                pygame.draw.rect(self.screen, glow_color, glow_rect, 1)
     
     def draw_waveform(self):
         """Draw audio waveform"""
@@ -137,32 +172,55 @@ class AudioVisualizer:
         points = []
         wave_height = self.height // 2
         
-        for i, sample in enumerate(self.audio_data):
-            x = i * self.width / len(self.audio_data)
+        # Clean audio data
+        clean_audio = np.nan_to_num(self.audio_data, nan=0.0, posinf=0.0, neginf=0.0)
+        clean_audio = np.clip(clean_audio, -1.0, 1.0)
+        
+        for i, sample in enumerate(clean_audio):
+            x = i * self.width / len(clean_audio)
             y = wave_height + sample * wave_height * 0.8
-            points.append((x, y))
+            
+            # Ensure coordinates are valid
+            x = np.clip(x, 0, self.width)
+            y = np.clip(y, 0, self.height)
+            
+            points.append((int(x), int(y)))
         
         if len(points) > 1:
-            pygame.draw.lines(self.screen, self.primary_color, False, points, 3)
-            
-            # Mirror effect
-            mirror_points = [(x, self.height - y) for x, y in points]
-            pygame.draw.lines(self.screen, 
-                            (*self.primary_color[:2], self.primary_color[2] // 3), 
-                            False, mirror_points, 2)
+            try:
+                pygame.draw.lines(self.screen, self.primary_color, False, points, 3)
+                
+                # Mirror effect
+                mirror_points = [(x, max(0, min(self.height, self.height - y))) for x, y in points]
+                pygame.draw.lines(self.screen, 
+                                (*self.primary_color[:2], self.primary_color[2] // 3), 
+                                False, mirror_points, 2)
+            except ValueError:
+                # Skip drawing if points are invalid
+                pass
     
     def draw_particles(self):
         """Draw audio-reactive particles"""
         if len(self.freq_data) == 0:
             return
             
-        avg_volume = np.mean(self.freq_data)
-        volume_scale = min(1.0, avg_volume / 0.1)
+        # Safely calculate average volume
+        valid_freq_data = self.freq_data[np.isfinite(self.freq_data)]
+        if len(valid_freq_data) > 0:
+            avg_volume = np.mean(valid_freq_data)
+            max_freq = np.max(valid_freq_data)
+        else:
+            avg_volume = 0
+            max_freq = 1
         
         for i, particle in enumerate(self.particles):
             # Get frequency for this particle
             freq_idx = int((i / len(self.particles)) * len(self.freq_data))
-            intensity = self.freq_data[freq_idx] / (np.max(self.freq_data) + 1e-6)
+            freq_idx = min(freq_idx, len(self.freq_data) - 1)
+            
+            intensity = 0
+            if max_freq > 0 and np.isfinite(self.freq_data[freq_idx]):
+                intensity = np.clip(self.freq_data[freq_idx] / max_freq, 0, 1)
             
             # Update particle position
             particle['x'] += particle['vx'] * (1 + intensity * 2)
@@ -179,16 +237,20 @@ class AudioVisualizer:
                 particle['y'] = 0
             
             # Update particle properties
-            particle['size'] = 1 + intensity * 8
+            particle['size'] = np.clip(1 + intensity * 8, 1, 20)
             particle['hue'] = (particle['hue'] + intensity * 0.02) % 1.0
             
             # Draw particle
-            brightness = 0.5 + intensity * 0.5
+            brightness = np.clip(0.5 + intensity * 0.5, 0, 1)
             color = self.hsv_to_rgb(particle['hue'], 1.0, brightness)
             
-            pygame.draw.circle(self.screen, color,
-                             (int(particle['x']), int(particle['y'])),
-                             int(particle['size']))
+            # Ensure valid coordinates and size
+            x = int(np.clip(particle['x'], 0, self.width))
+            y = int(np.clip(particle['y'], 0, self.height))
+            size = int(particle['size'])
+            
+            if size > 0:
+                pygame.draw.circle(self.screen, color, (x, y), size)
     
     def draw_spiral(self):
         """Draw frequency data in spiral pattern"""
@@ -198,22 +260,37 @@ class AudioVisualizer:
         center_x = self.width // 2
         center_y = self.height // 2
         
+        # Safely get max frequency
+        valid_freq_data = self.freq_data[np.isfinite(self.freq_data)]
+        if len(valid_freq_data) > 0:
+            max_freq = np.max(valid_freq_data)
+        else:
+            max_freq = 1
+        
         for i, amplitude in enumerate(self.freq_data):
             if i % 4 != 0:  # Skip some points for performance
                 continue
                 
+            # Ensure valid amplitude
+            if not np.isfinite(amplitude):
+                amplitude = 0
+                
             angle = (i / len(self.freq_data)) * math.pi * 8 + self.time * 0.05
-            intensity = amplitude / (np.max(self.freq_data) + 1e-6)
-            radius = 50 + intensity * 150 + i * 0.3
+            intensity = np.clip(amplitude / max_freq if max_freq > 0 else 0, 0, 1)
+            radius = np.clip(50 + intensity * 150 + i * 0.3, 0, max(self.width, self.height))
             
             x = center_x + math.cos(angle) * radius
             y = center_y + math.sin(angle) * radius
             
+            # Ensure coordinates are within screen bounds
+            x = np.clip(x, 0, self.width)
+            y = np.clip(y, 0, self.height)
+            
             hue = (i / len(self.freq_data) + self.time * 0.01) % 1.0
-            brightness = 0.5 + intensity * 0.5
+            brightness = np.clip(0.5 + intensity * 0.5, 0, 1)
             color = self.hsv_to_rgb(hue, 1.0, brightness)
             
-            size = int(2 + intensity * 6)
+            size = max(1, int(2 + intensity * 6))
             pygame.draw.circle(self.screen, color, (int(x), int(y)), size)
     
     def draw_plasma(self):
