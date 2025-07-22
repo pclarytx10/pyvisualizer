@@ -1,0 +1,11 @@
+[project]
+name = "pyvisualizer"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.21.0",
+    "pyaudio>=0.2.11",
+    "pygame>=2.1.0",
+]

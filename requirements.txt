@@ -1,0 +1,5 @@
+# Python Audio Visualizer Dependencies
+# On macOS, "brew install portaudio" to resolve pyaudio build issues
+pygame>=2.1.0
+pyaudio>=0.2.11
+numpy>=1.21.0
