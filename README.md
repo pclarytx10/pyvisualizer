@@ -28,16 +28,23 @@ A real-time audio visualizer inspired by classic Winamp visualizations. This app
 
 ```bash
 # Install uv if you haven't already
-pip install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Clone or download the project files
 # Navigate to the project directory
 
+#Create a new virtual environment:
+uv venv (This will create a hidden directory: .venv. It will not conflict with your current venv directory)
+
+#Initialize the correct virtual environment:
+source .venv/bin/activate
+
 # Install dependencies
-uv pip install -r requirements.txt
+uv add -r requirements.txt (This installs deps and creates a uv.lock file)
 
 # Run the visualizer
-python audio_visualizer.py
+uv run audio_visualizer.py
+
 ```
 
 ### Using pip (Traditional)
